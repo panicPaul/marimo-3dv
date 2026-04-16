@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from enum import Enum
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,9 @@ import marimo_3dv.gui.pydantic as pgui
 from marimo_3dv import form_gui, json_gui
 from marimo_3dv.gui.pydantic import (
     _DIRECT_JSON_EDITOR_KEY,
+    _NULLABLE_ENABLED_KEY,
+    _NULLABLE_VALUE_KEY,
+    NullableGui,
     PydanticGui,
     PydanticJsonGui,
 )
@@ -117,6 +121,38 @@ class _NestedFallbackOuterModel(BaseModel):
     inner: _NestedStringListModel = _NestedStringListModel()
 
 
+class _Mode(Enum):
+    FAST = "fast"
+    QUALITY = "quality"
+
+
+class _OptionalScalarModel(BaseModel):
+    count: int | None = None
+
+
+class _OptionalEnumModel(BaseModel):
+    mode: _Mode | None = None
+
+
+class _OptionalArrayModel(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    weights: Float[np.ndarray, "2 2"] | None = None  # noqa: UP037
+
+
+class _OptionalNestedModel(BaseModel):
+    title: str = "viewer"
+    inner: _InnerModel | None = None
+
+
+class _NestedOptionalOuterModel(BaseModel):
+    child: _OptionalNestedModel = _OptionalNestedModel()
+
+
+class _UnsupportedUnionModel(BaseModel):
+    value: int | str
+
+
 @pytest.fixture
 def notebook_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pgui.mo, "running_in_notebook", lambda: True)
@@ -214,6 +250,110 @@ def test_nested_models_use_nested_tabs() -> None:
 
     assert isinstance(generated.elements["inner"], PydanticGui)
     assert "marimo-tabs" in generated.text
+
+
+def test_optional_scalars_render_nullable_wrapper_and_round_trip() -> None:
+    generated = PydanticGui(_OptionalScalarModel, include_json_editor=False)
+    optional = generated.elements["count"]
+
+    assert isinstance(optional, NullableGui)
+    assert generated.value == _OptionalScalarModel(count=None)
+
+    generated._update({"count": {_NULLABLE_ENABLED_KEY: True, _NULLABLE_VALUE_KEY: 7}})
+
+    assert generated.value == _OptionalScalarModel(count=7)
+
+
+def test_optional_toggle_off_preserves_invalid_child_draft() -> None:
+    generated = PydanticGui(_OptionalScalarModel, include_json_editor=False)
+
+    generated._update({"count": {_NULLABLE_ENABLED_KEY: True, _NULLABLE_VALUE_KEY: 5}})
+    generated._update(
+        {"count": {_NULLABLE_ENABLED_KEY: False, _NULLABLE_VALUE_KEY: "bad"}}
+    )
+
+    assert generated.value == _OptionalScalarModel(count=None)
+
+    generated._update({"count": {_NULLABLE_ENABLED_KEY: True}})
+
+    assert generated.value is None
+
+
+def test_optional_enums_use_same_nullable_wrapper() -> None:
+    generated = PydanticGui(_OptionalEnumModel, include_json_editor=False)
+
+    generated._update(
+        {
+                "mode": {
+                    _NULLABLE_ENABLED_KEY: True,
+                    _NULLABLE_VALUE_KEY: [pgui._dropdown_key(_Mode.QUALITY)],
+                }
+            }
+        )
+
+    assert generated.value == _OptionalEnumModel(mode=_Mode.QUALITY)
+
+
+def test_optional_arrays_round_trip_through_nullable_wrapper() -> None:
+    generated = PydanticGui(_OptionalArrayModel, include_json_editor=False)
+
+    generated._update(
+        {
+            "weights": {
+                _NULLABLE_ENABLED_KEY: True,
+                _NULLABLE_VALUE_KEY: [[1.0, 2.0], [3.0, 4.0]],
+            }
+        }
+    )
+
+    assert generated.value is not None
+    assert isinstance(generated.value.weights, np.ndarray)
+    assert np.allclose(
+        generated.value.weights, np.array([[1.0, 2.0], [3.0, 4.0]])
+    )
+
+
+def test_optional_nested_models_render_nullable_tabs() -> None:
+    generated = PydanticGui(_OptionalNestedModel, include_json_editor=False)
+    inner = generated.elements["inner"]
+
+    assert isinstance(inner, NullableGui)
+
+    generated._update(
+        {
+            "inner": {
+                _NULLABLE_ENABLED_KEY: True,
+                _NULLABLE_VALUE_KEY: {"threshold": 0.8},
+            }
+        }
+    )
+
+    assert generated.value == _OptionalNestedModel(
+        title="viewer",
+        inner=_InnerModel(enabled=True, threshold=0.8),
+    )
+
+
+def test_nested_optional_models_work_recursively() -> None:
+    generated = PydanticGui(_NestedOptionalOuterModel, include_json_editor=False)
+
+    generated._update(
+        {
+            "child": {
+                "inner": {
+                    _NULLABLE_ENABLED_KEY: True,
+                    _NULLABLE_VALUE_KEY: {"enabled": False},
+                }
+            }
+        }
+    )
+
+    assert generated.value == _NestedOptionalOuterModel(
+        child=_OptionalNestedModel(
+            title="viewer",
+            inner=_InnerModel(enabled=False, threshold=0.5),
+        )
+    )
 
 
 def test_numpy_arrays_round_trip_through_matrix_updates() -> None:
@@ -365,6 +505,49 @@ def test_nested_json_gui_uses_nested_tabs() -> None:
     assert "marimo-tabs" in generated.text
 
 
+def test_json_gui_supports_optional_scalars_via_null() -> None:
+    generated = PydanticJsonGui(_OptionalScalarModel)
+
+    generated._update('{\n  "count": null\n}')
+    assert generated.value == _OptionalScalarModel(count=None)
+
+    generated._update('{\n  "count": 9\n}')
+    assert generated.value == _OptionalScalarModel(count=9)
+
+
+def test_json_gui_supports_optional_nested_models() -> None:
+    generated = PydanticJsonGui(_OptionalNestedModel)
+    inner = generated.elements["inner"]
+
+    assert isinstance(inner, NullableGui)
+
+    generated._update(
+        {
+            _DIRECT_JSON_EDITOR_KEY: '{\n  "title": "json"\n}',
+            "inner": {
+                _NULLABLE_ENABLED_KEY: True,
+                _NULLABLE_VALUE_KEY: '{\n  "threshold": 0.8\n}',
+            },
+        }
+    )
+
+    assert generated.value == _OptionalNestedModel(
+        title="json",
+        inner=_InnerModel(enabled=True, threshold=0.8),
+    )
+
+    generated._update({"inner": {_NULLABLE_ENABLED_KEY: False}})
+
+    assert generated.value == _OptionalNestedModel(title="json", inner=None)
+
+    generated._update({"inner": {_NULLABLE_ENABLED_KEY: True}})
+
+    assert generated.value == _OptionalNestedModel(
+        title="json",
+        inner=_InnerModel(enabled=True, threshold=0.8),
+    )
+
+
 def test_partial_nested_updates_do_not_require_full_frontend_payload() -> None:
     generated = PydanticGui(_OuterModel, include_json_editor=False)
     nested = generated.elements["inner"]
@@ -392,3 +575,8 @@ def test_inactive_nested_tabs_keep_live_state_on_submit() -> None:
         left=_InnerModel(enabled=True, threshold=0.8),
         right=_InnerModel(enabled=False, threshold=0.5),
     )
+
+
+def test_general_unions_remain_unsupported() -> None:
+    with pytest.raises(NotImplementedError):
+        PydanticGui(_UnsupportedUnionModel, include_json_editor=False)

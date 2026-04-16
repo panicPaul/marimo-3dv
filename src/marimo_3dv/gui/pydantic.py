@@ -35,6 +35,10 @@ _JSON_TAB = "JSON"
 _JSON_EDITOR_KEY = "__json_editor__"
 _TABS_KEY = "__tabs__"
 _DIRECT_JSON_EDITOR_KEY = "__direct_json_editor__"
+_NULLABLE_ENABLED_KEY = "__enabled__"
+_NULLABLE_VALUE_KEY = "__value__"
+_NULLABLE_NONE_TAB = "None"
+_NULLABLE_SET_TAB = "Configure"
 
 
 @dataclass(frozen=True)
@@ -64,7 +68,9 @@ class _FieldSpec:
     model_cls: type[BaseModel]
     name: str
     annotation: Any
+    effective_annotation: Any
     info: FieldInfo
+    is_optional: bool
     is_nested_model: bool
 
     def label(self) -> str:
@@ -82,6 +88,12 @@ class _FieldSpec:
         *,
         update_children: bool,
     ) -> Any:
+        if isinstance(element, NullableGui):
+            return element._parse_frontend_value(
+                frontend_value,
+                update_children=update_children,
+            )
+
         if isinstance(element, PydanticGui):
             payload, _ = element._payload_from_frontend(
                 frontend_value,
@@ -90,23 +102,197 @@ class _FieldSpec:
             )
             return payload
 
-        if update_children and element._value_frontend != frontend_value:
-            element._update(frontend_value)
-            python_value = element._value
-        else:
-            python_value = element._convert_value(frontend_value)
-        return self.to_model_value(python_value)
+        return _parse_element_frontend_value(
+            self,
+            element,
+            frontend_value,
+            update_children=update_children,
+        )
 
     def to_model_value(self, value: Any) -> Any:
         if self.is_nested_model:
             return value
-        if self.annotation is Path:
+        if self.effective_annotation is Path:
             return _coerce_path_value(self.info, value)
-        if _is_array_annotation(self.annotation):
-            return _coerce_array_value(self.annotation, value)
-        if _uses_text_fallback(self.annotation) and isinstance(value, str):
+        if _is_array_annotation(self.effective_annotation):
+            return _coerce_array_value(self.effective_annotation, value)
+        if _uses_text_fallback(self.effective_annotation) and isinstance(
+            value, str
+        ):
             return _maybe_parse_json_text(value)
         return value
+
+
+class NullableGui(UIElement[dict[str, JSONType], Any]):
+    """Wrap a child control with a nullable on/off switch."""
+
+    _name = "marimo-dict"
+
+    def __init__(
+        self,
+        spec: _FieldSpec,
+        child: UIElement[Any, Any],
+        *,
+        enabled: bool,
+        on_change: Any | None = None,
+    ) -> None:
+        self._spec = spec
+        self._child = child
+        self._toggle = mo.ui.tabs(
+            {
+                _NULLABLE_NONE_TAB: mo.md(""),
+                _NULLABLE_SET_TAB: mo.callout(child, kind="neutral"),
+            },
+            value=_NULLABLE_SET_TAB if enabled else _NULLABLE_NONE_TAB,
+            label=spec.label(),
+        )
+        self._draft_frontend_value = _current_element_frontend_value(child)
+        self._elements = {
+            _NULLABLE_ENABLED_KEY: self._toggle,
+            _NULLABLE_VALUE_KEY: child,
+        }
+        super().__init__(
+            component_name=self._name,
+            initial_value=self._current_frontend_value(),
+            label="",
+            args={
+                "element-ids": {
+                    element._id: name
+                    for name, element in self._elements.items()
+                }
+            },
+            slotted_html=self._toggle.text,
+            on_change=on_change,
+        )
+        for name, element in self._elements.items():
+            element._register_as_view(parent=self, key=name)
+
+    @property
+    def elements(self) -> dict[str, UIElement[Any, Any]]:
+        return self._elements
+
+    def _clone(self) -> NullableGui:
+        return type(self)(
+            self._spec,
+            self._child._clone(),
+            enabled=self._toggle.value == _NULLABLE_SET_TAB,
+            on_change=self._on_change,
+        )
+
+    def _current_frontend_value(self) -> dict[str, JSONType]:
+        return {
+            _NULLABLE_ENABLED_KEY: _current_element_frontend_value(
+                self._toggle
+            ),
+            _NULLABLE_VALUE_KEY: self._draft_frontend_value,
+        }
+
+    def _convert_value(self, value: dict[str, JSONType]) -> Any:
+        return self._parse_frontend_value(value, update_children=True)
+
+    def _parse_frontend_value(
+        self,
+        value: JSONType,
+        *,
+        update_children: bool,
+    ) -> Any:
+        merged = self._current_frontend_value()
+        if isinstance(value, dict):
+            merged.update(value)
+
+        enabled_frontend = merged.get(
+            _NULLABLE_ENABLED_KEY,
+            _current_element_frontend_value(self._toggle),
+        )
+        if isinstance(enabled_frontend, bool):
+            enabled_frontend = self._tabs_frontend_value(enabled_frontend)
+        child_frontend = merged.get(
+            _NULLABLE_VALUE_KEY,
+            _current_element_frontend_value(self._child),
+        )
+
+        if update_children:
+            if self._toggle._value_frontend != enabled_frontend:
+                _set_local_frontend_value(self._toggle, enabled_frontend)
+            if self._child._value_frontend != child_frontend:
+                _set_local_frontend_value(self._child, child_frontend)
+            self._draft_frontend_value = child_frontend
+
+        enabled = self._is_enabled_frontend_value(enabled_frontend)
+        if not enabled:
+            return None
+        return self._parse_child_frontend_value(
+            child_frontend,
+            update_children=update_children,
+        )
+
+    def _parse_child_frontend_value(
+        self,
+        frontend_value: JSONType,
+        *,
+        update_children: bool,
+    ) -> Any:
+        if isinstance(self._child, PydanticGui):
+            payload, _ = self._child._payload_from_frontend(
+                frontend_value,
+                update_children=update_children,
+                force_json=False,
+            )
+            return payload
+        if isinstance(self._child, PydanticJsonGui):
+            if self._child._composite_mode:
+                if not isinstance(frontend_value, dict):
+                    raise ValueError(
+                        f"{self._spec.name}: Expected an object."
+                    )
+                payload, error = self._child._payload_from_frontend(
+                    self._child._merged_frontend_value(frontend_value),
+                    update_children=update_children,
+                )
+            else:
+                if isinstance(frontend_value, dict):
+                    frontend_value = frontend_value.get(
+                        _DIRECT_JSON_EDITOR_KEY,
+                        self._child._current_frontend_value().get(
+                            _DIRECT_JSON_EDITOR_KEY,
+                            "",
+                        ),
+                    )
+                payload, error = _json_text_to_payload(frontend_value)
+            if error is not None:
+                raise ValueError(error)
+            if update_children and self._child._value_frontend != frontend_value:
+                _set_local_frontend_value(self._child, frontend_value)
+            return payload
+        return _parse_element_frontend_value(
+            self._spec,
+            self._child,
+            frontend_value,
+            update_children=update_children,
+        )
+
+    def _frontend_value_from_payload(self, value: Any) -> dict[str, JSONType]:
+        if value is None:
+            child_frontend = self._draft_frontend_value
+        else:
+            child_frontend = _frontend_value_for_element(
+                self._spec,
+                self._child,
+                value,
+            )
+            self._draft_frontend_value = child_frontend
+        return {
+            _NULLABLE_ENABLED_KEY: self._tabs_frontend_value(value is not None),
+            _NULLABLE_VALUE_KEY: child_frontend,
+        }
+
+    def _is_enabled_frontend_value(self, frontend_value: JSONType) -> bool:
+        if isinstance(frontend_value, bool):
+            return frontend_value
+        return self._toggle._convert_value(frontend_value) == _NULLABLE_SET_TAB
+
+    def _tabs_frontend_value(self, enabled: bool) -> JSONType:
+        return 1 if enabled else 0
 
 
 class PydanticGui(
@@ -406,6 +592,21 @@ class PydanticGui(
         value: Any,
         updates: list[tuple[UIElement[Any, Any], JSONType]],
     ) -> None:
+        if isinstance(element, NullableGui):
+            nullable_frontend = element._frontend_value_from_payload(value)
+            _set_local_frontend_value(element, nullable_frontend)
+            updates.append(
+                (element.elements[_NULLABLE_ENABLED_KEY], nullable_frontend[_NULLABLE_ENABLED_KEY])
+            )
+            if value is not None:
+                self._collect_sync_updates(
+                    spec,
+                    element.elements[_NULLABLE_VALUE_KEY],
+                    value,
+                    updates,
+                )
+            return
+
         if isinstance(element, PydanticGui):
             nested_payload = value if isinstance(value, dict) else {}
             nested_frontend = element._frontend_value_from_payload(
@@ -500,8 +701,8 @@ class PydanticJsonGui(UIElement[Any, ModelT | None], Generic[ModelT]):
         self._editor: UIElement[Any, Any] | None = None
         self._tabs: UIElement[Any, Any] | None = None
         self._composite_mode = any(
-            _is_model_type(info.annotation)
-            for info in model_cls.model_fields.values()
+            _make_field_spec(model_cls, name, info).is_nested_model
+            for name, info in model_cls.model_fields.items()
         )
 
         if not self._composite_mode:
@@ -638,25 +839,19 @@ class PydanticJsonGui(UIElement[Any, ModelT | None], Generic[ModelT]):
             if not spec.is_nested_model:
                 continue
             element = self._elements[name]
-            assert isinstance(element, PydanticJsonGui)
             frontend_value = value.get(
                 name,
                 _current_element_frontend_value(element),
             )
-            if element._composite_mode:
-                if not isinstance(frontend_value, dict):
-                    return {}, f"{name}: Expected an object."
-                nested_payload, error = element._payload_from_frontend(
-                    element._merged_frontend_value(frontend_value),
+            try:
+                payload[name] = _parse_nested_json_value(
+                    spec,
+                    element,
+                    frontend_value,
                     update_children=update_children,
                 )
-            else:
-                nested_payload, error = _json_text_to_payload(frontend_value)
-            if error is not None:
-                return {}, f"{name}.{error}"
-            if update_children and element._value_frontend != frontend_value:
-                _set_local_frontend_value(element, frontend_value)
-            payload[name] = nested_payload
+            except ValueError as exc:
+                return {}, f"{name}.{exc}"
         return payload, None
 
     def _merged_frontend_value(
@@ -786,14 +981,7 @@ def _build_model_gui(
     nested_tabs: dict[str, Any] = {}
 
     for name, info in model_cls.model_fields.items():
-        annotation = info.annotation
-        spec = _FieldSpec(
-            model_cls=model_cls,
-            name=name,
-            annotation=annotation,
-            info=info,
-            is_nested_model=_is_model_type(annotation),
-        )
+        spec = _make_field_spec(model_cls, name, info)
         field_value = payload[name]
         element = _build_field_element(spec, field_value)
         field_specs[name] = spec
@@ -863,27 +1051,28 @@ def _build_model_json_gui(
 
     direct_payload: dict[str, Any] = {}
     for name, info in model_cls.model_fields.items():
-        spec = _FieldSpec(
-            model_cls=model_cls,
-            name=name,
-            annotation=info.annotation,
-            info=info,
-            is_nested_model=_is_model_type(info.annotation),
-        )
+        spec = _make_field_spec(model_cls, name, info)
         field_specs[name] = spec
         field_names.append(name)
         if spec.is_nested_model:
-            nested_payload = (
-                payload[name] if isinstance(payload[name], dict) else {}
-            )
+            nested_payload = payload[name]
             nested_editor = PydanticJsonGui(
-                info.annotation,
+                spec.effective_annotation,
                 value=nested_payload,
                 label="",
             )
-            elements[name] = nested_editor
+            element: UIElement[Any, Any]
+            if spec.is_optional:
+                element = NullableGui(
+                    spec,
+                    nested_editor,
+                    enabled=nested_payload is not None,
+                )
+            else:
+                element = nested_editor
+            elements[name] = element
             nested_tabs[spec.label()] = _with_help_text(
-                nested_editor,
+                element,
                 spec.help_text(),
             )
         else:
@@ -920,8 +1109,24 @@ def _build_field_element(
     spec: _FieldSpec,
     value: Any,
 ) -> UIElement[Any, Any]:
-    annotation = spec.annotation
     label = spec.label()
+    if spec.is_optional:
+        child = _build_concrete_field_element(
+            spec,
+            _optional_child_value(spec, value),
+            label="",
+        )
+        return NullableGui(spec, child, enabled=value is not None)
+    return _build_concrete_field_element(spec, value, label=label)
+
+
+def _build_concrete_field_element(
+    spec: _FieldSpec,
+    value: Any,
+    *,
+    label: str,
+) -> UIElement[Any, Any]:
+    annotation = spec.effective_annotation
 
     if _is_union_type(annotation):
         raise NotImplementedError(
@@ -1072,65 +1277,43 @@ def _resolve_initial_payload(
 
     payload: dict[str, Any] = {}
     for name, info in model_cls.model_fields.items():
+        spec = _make_field_spec(model_cls, name, info)
         if name in raw:
             field_value = raw[name]
-            if _is_model_type(info.annotation):
+            if field_value is not None and spec.is_nested_model:
                 payload[name] = _resolve_initial_payload(
-                    info.annotation, field_value
+                    spec.effective_annotation,
+                    field_value,
                 )
             else:
                 payload[name] = field_value
         else:
-            payload[name] = _initial_field_value(name, info)
+            payload[name] = _initial_field_value(name, info, model_cls=model_cls)
     return payload
 
 
-def _initial_field_value(name: str, info: FieldInfo) -> Any:
+def _initial_field_value(
+    name: str,
+    info: FieldInfo,
+    *,
+    model_cls: type[BaseModel] | None = None,
+) -> Any:
+    spec = _make_field_spec(model_cls, name, info)
     if not info.is_required():
         default = info.get_default(call_default_factory=True)
-        if _is_model_type(info.annotation):
-            return _resolve_initial_payload(info.annotation, default)
+        if default is None:
+            return None
+        if spec.is_nested_model:
+            return _resolve_initial_payload(spec.effective_annotation, default)
         return default
 
-    annotation = info.annotation
+    if spec.is_optional:
+        return None
+
+    annotation = spec.effective_annotation
     if _is_union_type(annotation):
         raise NotImplementedError(f"Union fields are not supported yet: {name}")
-    if annotation is bool:
-        return False
-    if annotation is str:
-        return ""
-    if annotation is Path:
-        return ""
-    if annotation is int:
-        bounds = _numeric_bounds(info)
-        lower = bounds.lower if bounds.lower is not None else 0
-        return int(lower) + (1 if bounds.strict_lower else 0)
-    if annotation is float:
-        bounds = _numeric_bounds(info)
-        lower = bounds.lower if bounds.lower is not None else 0.0
-        if bounds.strict_lower:
-            step = bounds.step if bounds.step is not None else 0.1
-            return float(lower) + float(step)
-        return float(lower)
-    if _is_literal_type(annotation):
-        options = get_args(annotation)
-        if not options:
-            raise ValueError(
-                f"Literal field {name!r} does not define any options."
-            )
-        return options[0]
-    if _is_enum_type(annotation):
-        options = list(annotation)
-        if not options:
-            raise ValueError(
-                f"Enum field {name!r} does not define any options."
-            )
-        return options[0]
-    if _is_model_type(annotation):
-        return _resolve_initial_payload(annotation, None)
-    if _is_array_annotation(annotation):
-        return _default_array_value(annotation)
-    return ""
+    return _default_value_for_annotation(name, annotation, info)
 
 
 def _validate_payload(
@@ -1275,6 +1458,78 @@ def _slider_limits(
     return start, stop
 
 
+def _make_field_spec(
+    model_cls: type[BaseModel] | None,
+    name: str,
+    info: FieldInfo,
+) -> _FieldSpec:
+    annotation = info.annotation
+    optional = _is_optional_type(annotation)
+    effective_annotation = _unwrap_optional_type(annotation)
+    return _FieldSpec(
+        model_cls=model_cls or BaseModel,
+        name=name,
+        annotation=annotation,
+        effective_annotation=effective_annotation,
+        info=info,
+        is_optional=optional,
+        is_nested_model=_is_model_type(effective_annotation),
+    )
+
+
+def _default_value_for_annotation(
+    name: str,
+    annotation: Any,
+    info: FieldInfo,
+) -> Any:
+    if annotation is bool:
+        return False
+    if annotation is str:
+        return ""
+    if annotation is Path:
+        return ""
+    if annotation is int:
+        bounds = _numeric_bounds(info)
+        lower = bounds.lower if bounds.lower is not None else 0
+        return int(lower) + (1 if bounds.strict_lower else 0)
+    if annotation is float:
+        bounds = _numeric_bounds(info)
+        lower = bounds.lower if bounds.lower is not None else 0.0
+        if bounds.strict_lower:
+            step = bounds.step if bounds.step is not None else 0.1
+            return float(lower) + float(step)
+        return float(lower)
+    if _is_literal_type(annotation):
+        options = get_args(annotation)
+        if not options:
+            raise ValueError(
+                f"Literal field {name!r} does not define any options."
+            )
+        return options[0]
+    if _is_enum_type(annotation):
+        options = list(annotation)
+        if not options:
+            raise ValueError(
+                f"Enum field {name!r} does not define any options."
+            )
+        return options[0]
+    if _is_model_type(annotation):
+        return _resolve_initial_payload(annotation, None)
+    if _is_array_annotation(annotation):
+        return _default_array_value(annotation)
+    return ""
+
+
+def _optional_child_value(spec: _FieldSpec, value: Any) -> Any:
+    if value is not None:
+        return value
+    return _default_value_for_annotation(
+        spec.name,
+        spec.effective_annotation,
+        spec.info,
+    )
+
+
 def _is_literal_type(annotation: Any) -> bool:
     return get_origin(annotation) is Literal
 
@@ -1282,6 +1537,25 @@ def _is_literal_type(annotation: Any) -> bool:
 def _is_union_type(annotation: Any) -> bool:
     origin = get_origin(annotation)
     return origin is UnionType or origin is Union
+
+
+def _is_optional_type(annotation: Any) -> bool:
+    if not _is_union_type(annotation):
+        return False
+    args = get_args(annotation)
+    non_none_args = [arg for arg in args if arg is not type(None)]
+    return len(non_none_args) == 1 and len(non_none_args) != len(args)
+
+
+def _unwrap_optional_type(annotation: Any) -> Any:
+    if not _is_union_type(annotation):
+        return annotation
+    if not _is_optional_type(annotation):
+        raise NotImplementedError("Only Optional[T] unions are supported.")
+    for arg in get_args(annotation):
+        if arg is not type(None):
+            return arg
+    return annotation
 
 
 def _is_model_type(annotation: Any) -> bool:
@@ -1371,11 +1645,13 @@ def _frontend_value_for_element(
     element: UIElement[Any, Any],
     value: Any,
 ) -> JSONType:
+    if isinstance(element, NullableGui):
+        return element._frontend_value_from_payload(value)
     if isinstance(element, PydanticGui):
         payload = value if isinstance(value, dict) else {}
         return element._frontend_value_from_payload(payload)
 
-    annotation = spec.annotation
+    annotation = spec.effective_annotation
     if annotation is Path:
         return _file_browser_frontend_value(value)
     if _is_array_annotation(annotation):
@@ -1387,7 +1663,57 @@ def _frontend_value_for_element(
     return _text_value(value)
 
 
+def _parse_element_frontend_value(
+    spec: _FieldSpec,
+    element: UIElement[Any, Any],
+    frontend_value: JSONType,
+    *,
+    update_children: bool,
+) -> Any:
+    if update_children and element._value_frontend != frontend_value:
+        _set_local_frontend_value(element, frontend_value)
+        python_value = element._value
+    else:
+        python_value = element._convert_value(frontend_value)
+    return spec.to_model_value(python_value)
+
+
+def _parse_nested_json_value(
+    spec: _FieldSpec,
+    element: UIElement[Any, Any],
+    frontend_value: JSONType,
+    *,
+    update_children: bool,
+) -> Any:
+    if isinstance(element, NullableGui):
+        try:
+            return element._parse_frontend_value(
+                frontend_value,
+                update_children=update_children,
+            )
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+    assert isinstance(element, PydanticJsonGui)
+    if element._composite_mode:
+        if not isinstance(frontend_value, dict):
+            raise ValueError("Expected an object.")
+        nested_payload, error = element._payload_from_frontend(
+            element._merged_frontend_value(frontend_value),
+            update_children=update_children,
+        )
+    else:
+        nested_payload, error = _json_text_to_payload(frontend_value)
+    if error is not None:
+        raise ValueError(error)
+    if update_children and element._value_frontend != frontend_value:
+        _set_local_frontend_value(element, frontend_value)
+    return nested_payload
+
+
 def _dropdown_key(value: Any) -> str:
+    if isinstance(value, Enum):
+        return repr(value)
     return str(value)
 
 
@@ -1421,6 +1747,8 @@ def _set_local_frontend_value(
 
 
 def _current_element_frontend_value(element: UIElement[Any, Any]) -> JSONType:
+    if isinstance(element, NullableGui):
+        return element._current_frontend_value()
     if isinstance(element, PydanticGui):
         return element._current_frontend_value()
     if isinstance(element, PydanticJsonGui):

@@ -1410,6 +1410,7 @@ class _NativeViewerAnyWidget(anywidget.AnyWidget):
     stream_token = traitlets.Unicode("").tag(sync=True)
     transport_mode = traitlets.Unicode("websocket").tag(sync=True)
     _camera_revision = traitlets.Int(0).tag(sync=True)
+    render_revision = traitlets.Int(0).tag(sync=True)
     interaction_active = traitlets.Bool(False).tag(sync=True)
     latency_ms = traitlets.Float(0.0).tag(sync=True)
     latency_sample_ms = traitlets.Float(0.0).tag(sync=True)
@@ -2136,6 +2137,8 @@ class MarimoViewer(_StableMarimoAnyWidget):
         def _apply_trait_updates() -> None:
             self.widget.error_text = ""
             self.widget.send_state("error_text")
+            self.widget.render_revision = revision
+            self.widget.send_state("render_revision")
             if next_camera_state_json is not None:
                 self.widget.camera_state_json = next_camera_state_json
                 self.widget.send_state("camera_state_json")

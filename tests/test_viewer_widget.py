@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 import torch
 from marimo._runtime.virtual_file import InMemoryStorage, VirtualFileRegistry
+from marimo_config_gui import PydanticGui
 from pydantic import BaseModel
 
 import marimo_3dv.viewer.defaults as viewer_defaults
@@ -27,7 +28,6 @@ from marimo_3dv import (
     viewer_pipeline_controls_gui,
     viewer_pipeline_controls_handle,
 )
-from marimo_3dv.gui.pydantic import PydanticGui
 from marimo_3dv.viewer.controls import DesktopPydanticControls
 from marimo_3dv.viewer.widget import (
     _cleanup_active_marimo_viewers,

@@ -211,7 +211,7 @@ You can also generate marimo controls from a small Pydantic model:
 ```python
 from pydantic import BaseModel, Field
 
-from marimo_viser import form_gui
+from marimo_config_gui import config_gui
 
 
 class RenderSettings(BaseModel):
@@ -225,7 +225,7 @@ The generated UI is submit-gated and includes both structured controls and a
 JSON editor tab:
 
 ```python
-form = form_gui(RenderSettings)
+form = config_gui(RenderSettings, mode="form")
 form
 ```
 

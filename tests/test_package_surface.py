@@ -192,11 +192,12 @@ def test_gs_pipe_imports_work():
     assert show_distribution_op is not None
 
 
-def test_gui_helpers_import():
-    from marimo_3dv import form_gui, json_gui
+def test_gui_helpers_are_not_reexported() -> None:
+    import marimo_3dv
 
-    assert form_gui is not None
-    assert json_gui is not None
+    assert not hasattr(marimo_3dv, "form_gui")
+    assert not hasattr(marimo_3dv, "json_gui")
+    assert not hasattr(marimo_3dv, "config_gui")
 
 
 def test_backend_specific_viewer_imports_are_internal_only():

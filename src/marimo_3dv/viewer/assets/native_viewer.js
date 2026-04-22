@@ -54,6 +54,79 @@ function dot(a, b) {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
+function squaredDistance2D(a, b) {
+  const dx = a[0] - b[0];
+  const dy = a[1] - b[1];
+  return dx * dx + dy * dy;
+}
+
+function dedupePoints2D(points, epsilon = 1e-4) {
+  const deduped = [];
+  const maxSquaredDistance = epsilon * epsilon;
+  for (const point of points) {
+    if (
+      !deduped.some((existingPoint) =>
+        squaredDistance2D(existingPoint, point) <= maxSquaredDistance)
+    ) {
+      deduped.push(point);
+    }
+  }
+  return deduped;
+}
+
+function clipImplicitLineToViewport(a, b, c, width, height) {
+  const intersections = [];
+  if (Math.abs(b) > 1e-8) {
+    intersections.push([0.0, (-c) / b]);
+    intersections.push([width, (-c - a * width) / b]);
+  }
+  if (Math.abs(a) > 1e-8) {
+    intersections.push([(-c) / a, 0.0]);
+    intersections.push([(-c - b * height) / a, height]);
+  }
+
+  const visiblePoints = dedupePoints2D(
+    intersections.filter(
+      ([x, y]) =>
+        Number.isFinite(x)
+        && Number.isFinite(y)
+        && x >= 0.0
+        && x <= width
+        && y >= 0.0
+        && y <= height,
+    ),
+  );
+  if (visiblePoints.length < 2) {
+    return null;
+  }
+
+  let bestSegment = [visiblePoints[0], visiblePoints[1]];
+  let bestSquaredDistance = squaredDistance2D(
+    visiblePoints[0],
+    visiblePoints[1],
+  );
+  for (let index = 0; index < visiblePoints.length; index += 1) {
+    for (
+      let otherIndex = index + 1;
+      otherIndex < visiblePoints.length;
+      otherIndex += 1
+    ) {
+      const candidateSquaredDistance = squaredDistance2D(
+        visiblePoints[index],
+        visiblePoints[otherIndex],
+      );
+      if (candidateSquaredDistance > bestSquaredDistance) {
+        bestSquaredDistance = candidateSquaredDistance;
+        bestSegment = [visiblePoints[index], visiblePoints[otherIndex]];
+      }
+    }
+  }
+  if (bestSquaredDistance <= 1e-8) {
+    return null;
+  }
+  return bestSegment;
+}
+
 function conventionRotation(cameraConvention) {
   const rotations = {
     opencv: [
@@ -443,31 +516,19 @@ function render({ model, el }) {
       const a = projectedUp[0] / focal;
       const b = projectedUp[1] / focal;
       const c = projectedUp[2] - centerX * a - centerY * b;
-
-      const points = [];
-      if (Math.abs(b) > 1e-6) {
-        points.push([0.0, (-c - a * 0.0) / b]);
-        points.push([width, (-c - a * width) / b]);
-      }
-      if (Math.abs(a) > 1e-6) {
-        points.push([(-c - b * 0.0) / a, 0.0]);
-        points.push([(-c - b * height) / a, height]);
-      }
-      const visiblePoints = points.filter(
-        ([x, y]) =>
-          Number.isFinite(x)
-          && Number.isFinite(y)
-          && x >= 0.0
-          && x <= width
-          && y >= 0.0
-          && y <= height,
+      const clippedSegment = clipImplicitLineToViewport(
+        a,
+        b,
+        c,
+        width,
+        height,
       );
-      if (visiblePoints.length >= 2) {
+      if (clippedSegment !== null) {
         guidesContext.strokeStyle = "rgba(255,255,255,0.8)";
         guidesContext.lineWidth = 2.0;
         guidesContext.beginPath();
-        guidesContext.moveTo(visiblePoints[0][0], visiblePoints[0][1]);
-        guidesContext.lineTo(visiblePoints[1][0], visiblePoints[1][1]);
+        guidesContext.moveTo(clippedSegment[0][0], clippedSegment[0][1]);
+        guidesContext.lineTo(clippedSegment[1][0], clippedSegment[1][1]);
         guidesContext.stroke();
       }
     }

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 import marimo as mo
 from pydantic import BaseModel, Field, create_model
 
-from marimo_3dv.gui.pydantic import form_gui
+from marimo_config_gui import form_gui
 from marimo_3dv.viewer.controls import DesktopPydanticControls
 from marimo_3dv.viewer.widget import ViewerState
 
@@ -255,8 +255,6 @@ def viewer_controls_handle(
         default_config=resolved_default_config,
         gui=gui,
     )
-
-
 def viewer_controls_gui(
     viewer_state: ViewerState,
     *,

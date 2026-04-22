@@ -15,7 +15,7 @@ from plyfile import PlyData
 from pydantic import BaseModel, Field
 from torch import Tensor
 
-from marimo_3dv.gui.pydantic import form_gui
+from marimo_config_gui import form_gui
 from marimo_3dv.pipeline.bundle import ViewerBackendBundle, backend_bundle
 from marimo_3dv.pipeline.context import ViewerContext
 from marimo_3dv.pipeline.gui import (
@@ -113,7 +113,6 @@ def splat_load_form(*, default_path: Path | None = None) -> Any:
     return form_gui(
         SplatLoadConfig,
         value=default_config,
-        submit_label="Load File",
     )
 
 

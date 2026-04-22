@@ -1,6 +1,4 @@
 """Public package exports for marimo-3dv."""
-
-from marimo_3dv.gui.pydantic import form_gui, json_gui
 from marimo_3dv.ops.gs import (
     CompiledGsRenderView,
     FilterOpacityConfig,
@@ -139,12 +137,10 @@ __all__ = [
     "effect_node",
     "filter_opacity_op",
     "filter_size_op",
-    "form_gui",
     "get_gsplat_device",
     "gs_backend_bundle",
     "gs_render_view",
     "infer_sh_degree",
-    "json_gui",
     "load_splat_scene",
     "load_splat_scene_from_config",
     "link_viewer_states",

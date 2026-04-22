@@ -37,13 +37,13 @@ with app.setup:
     from pydantic import BaseModel, Field
     from torch import Tensor
 
+    from marimo_config_gui import config_gui
     from marimo_3dv import (
         CameraState,
         RenderResult,
         Viewer,
         ViewerState,
         apply_viewer_pipeline_config,
-        form_gui,
         gs_backend_bundle,
         viewer_pipeline_controls_gui,
     )
@@ -271,7 +271,7 @@ def _():
             description="How to clean up GPU resources before replacing a scene.",
         )
 
-    load_form = form_gui(
+    load_form = config_gui(
         LoadConfig, value=LoadConfig(), submit_label="Load File"
     )
     return (load_form,)

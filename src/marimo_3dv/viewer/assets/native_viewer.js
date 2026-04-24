@@ -977,6 +977,31 @@ function updateCameraMatrix() {
     revisionSentAtMs.delete(revision);
   }
 
+  function handleFramePacket(rawPacket, messageReceivedAtMs) {
+    const packet = parseFramePacket(rawPacket);
+    if (packet === null) {
+      return;
+    }
+    if (
+      typeof packet.header.revision === "number"
+      && packet.header.revision % 30 === 0
+      && model.get("transport_mode") === "websocket"
+    ) {
+      sendClockSyncPing();
+    }
+    void drawFrame(
+      packet.payload,
+      packet.header.width ?? 0,
+      packet.header.height ?? 0,
+      packet.header.revision ?? -1,
+      packet.header.render_time_ms,
+      Boolean(packet.header.interaction_active),
+      packet.header.mime_type,
+      messageReceivedAtMs,
+      packet.header.backend_frame_sent_perf_time_ms,
+    );
+  }
+
   function scheduleReconnect() {
     if (closed || reconnectTimeoutId !== null) {
       return;
@@ -1026,6 +1051,9 @@ function updateCameraMatrix() {
 
   function connectFrameStream() {
     disconnectFrameStream();
+    if (model.get("transport_mode") !== "websocket") {
+      return;
+    }
     const streamPort = Number(model.get("stream_port"));
     const streamPath = model.get("stream_path");
     const streamToken = model.get("stream_token");
@@ -1074,28 +1102,7 @@ function updateCameraMatrix() {
         }
         return;
       }
-      const messageReceivedAtMs = performance.now();
-      const packet = parseFramePacket(event.data);
-      if (packet === null) {
-        return;
-      }
-      if (
-        typeof packet.header.revision === "number"
-        && packet.header.revision % 30 === 0
-      ) {
-        sendClockSyncPing();
-      }
-      void drawFrame(
-        packet.payload,
-        packet.header.width ?? 0,
-        packet.header.height ?? 0,
-        packet.header.revision ?? -1,
-        packet.header.render_time_ms,
-        Boolean(packet.header.interaction_active),
-        packet.header.mime_type,
-        messageReceivedAtMs,
-        packet.header.backend_frame_sent_perf_time_ms,
-      );
+      handleFramePacket(event.data, performance.now());
     };
     socket.onerror = () => {
       scheduleReconnect();
@@ -1267,6 +1274,12 @@ function updateCameraMatrix() {
   const onStreamConfigChange = () => {
     connectFrameStream();
   };
+  const onFramePacketChange = () => {
+    if (model.get("transport_mode") !== "comm") {
+      return;
+    }
+    handleFramePacket(model.get("frame_packet"), performance.now());
+  };
   const onRenderFpsChange = () => {
     renderFps = Number(model.get("render_fps")) || null;
     updateLatencyBadge();
@@ -1297,6 +1310,8 @@ function updateCameraMatrix() {
   model.on("change:stream_port", onStreamConfigChange);
   model.on("change:stream_path", onStreamConfigChange);
   model.on("change:stream_token", onStreamConfigChange);
+  model.on("change:transport_mode", onStreamConfigChange);
+  model.on("change:frame_packet", onFramePacketChange);
   model.on("change:render_fps", onRenderFpsChange);
   model.on("change:show_axes", onShowAxesChange);
   model.on("change:show_horizon", onShowHorizonChange);
@@ -1313,6 +1328,7 @@ function updateCameraMatrix() {
   updateLatencyBadge();
   drawAxesGizmo();
   drawHorizon();
+  onFramePacketChange();
   connectFrameStream();
   pushCameraState();
 
@@ -1329,6 +1345,8 @@ function updateCameraMatrix() {
     model.off("change:stream_port", onStreamConfigChange);
     model.off("change:stream_path", onStreamConfigChange);
     model.off("change:stream_token", onStreamConfigChange);
+    model.off("change:transport_mode", onStreamConfigChange);
+    model.off("change:frame_packet", onFramePacketChange);
     model.off("change:render_fps", onRenderFpsChange);
     model.off("change:show_axes", onShowAxesChange);
     model.off("change:show_horizon", onShowHorizonChange);

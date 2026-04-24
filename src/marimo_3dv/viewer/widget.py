@@ -48,6 +48,7 @@ from starlette.routing import WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 CameraConvention = Literal["opencv", "opengl", "blender", "colmap"]
+ViewerTransportMode = Literal["comm", "websocket"]
 LinkedViewerStateField = Literal[
     "camera_state",
     "show_axes",
@@ -681,6 +682,7 @@ class ViewerState:
     internal_render_max_side: int | None
     interactive_max_side: int | None
     raise_on_error: bool
+    transport_mode: ViewerTransportMode
     last_click: ViewerClick | None = None
     show_axes: bool = True
     show_horizon: bool = False
@@ -726,6 +728,7 @@ class ViewerState:
         internal_render_max_side: int | None = 3840,
         interactive_max_side: int | None = 1980,
         raise_on_error: bool = True,
+        transport_mode: ViewerTransportMode = "comm",
         last_click: ViewerClick | None = None,
         show_axes: bool = True,
         show_horizon: bool = False,
@@ -767,6 +770,11 @@ class ViewerState:
                 "interactive_max_side must be None or a positive integer, "
                 f"got {interactive_max_side}."
             )
+        if transport_mode not in {"comm", "websocket"}:
+            raise ValueError(
+                "transport_mode must be 'comm' or 'websocket', "
+                f"got {transport_mode!r}."
+            )
         if keyboard_move_speed <= 0.0:
             raise ValueError(
                 "keyboard_move_speed must be positive, "
@@ -786,6 +794,7 @@ class ViewerState:
         self.internal_render_max_side = internal_render_max_side
         self.interactive_max_side = interactive_max_side
         self.raise_on_error = raise_on_error
+        self.transport_mode = transport_mode
         self.last_click = last_click
         self.show_axes = show_axes
         self.show_horizon = show_horizon
@@ -1061,6 +1070,7 @@ class ViewerState:
             internal_render_max_side=self.internal_render_max_side,
             interactive_max_side=self.interactive_max_side,
             raise_on_error=self.raise_on_error,
+            transport_mode=self.transport_mode,
             last_click=self.last_click,
             show_axes=self.show_axes,
             show_horizon=self.show_horizon,
@@ -1408,7 +1418,8 @@ class _NativeViewerAnyWidget(anywidget.AnyWidget):
     stream_port = traitlets.Int(0).tag(sync=True)
     stream_path = traitlets.Unicode("").tag(sync=True)
     stream_token = traitlets.Unicode("").tag(sync=True)
-    transport_mode = traitlets.Unicode("websocket").tag(sync=True)
+    transport_mode = traitlets.Unicode("comm").tag(sync=True)
+    frame_packet = traitlets.Bytes(b"").tag(sync=True)
     _camera_revision = traitlets.Int(0).tag(sync=True)
     render_revision = traitlets.Int(0).tag(sync=True)
     interaction_active = traitlets.Bool(False).tag(sync=True)
@@ -1476,6 +1487,7 @@ class _NativeViewerAnyWidget(anywidget.AnyWidget):
         stream_port: int,
         stream_path: str,
         stream_token: str,
+        transport_mode: ViewerTransportMode,
     ) -> None:
         super().__init__(
             camera_state_json=camera_state.to_json(),
@@ -1499,6 +1511,7 @@ class _NativeViewerAnyWidget(anywidget.AnyWidget):
             stream_port=stream_port,
             stream_path=stream_path,
             stream_token=stream_token,
+            transport_mode=transport_mode,
         )
 
 
@@ -2077,11 +2090,14 @@ class MarimoViewer(_StableMarimoAnyWidget):
             },
             encoded_bytes,
         )
-        broadcast_future = self._stream_server.publish(
-            self._stream_path.removeprefix("/streams/"),
-            packet,
-            scheduled_at=time.perf_counter(),
-        )
+        transport_mode = self.widget.transport_mode
+        broadcast_future = None
+        if transport_mode == "websocket":
+            broadcast_future = self._stream_server.publish(
+                self._stream_path.removeprefix("/streams/"),
+                packet,
+                scheduled_at=time.perf_counter(),
+            )
 
         if broadcast_future is not None:
 
@@ -2137,6 +2153,9 @@ class MarimoViewer(_StableMarimoAnyWidget):
         def _apply_trait_updates() -> None:
             self.widget.error_text = ""
             self.widget.send_state("error_text")
+            if transport_mode == "comm":
+                self.widget.frame_packet = packet
+                self.widget.send_state("frame_packet")
             self.widget.render_revision = revision
             self.widget.send_state("render_revision")
             if next_camera_state_json is not None:
@@ -2172,6 +2191,7 @@ def marimo_viewer(
     settled_quality: Literal["jpeg_95", "jpeg_100", "png"] | None = None,
     internal_render_max_side: int | None = None,
     interactive_max_side: int | None = None,
+    transport_mode: ViewerTransportMode | None = None,
     camera_convention: CameraConvention | None = None,
     initial_view: CameraState | None = None,
     state: ViewerState | None = None,
@@ -2195,6 +2215,9 @@ def marimo_viewer(
     use `rerender(interactive=True)` to drive rendering from Python instead.
     When `raise_on_error` is `True`, Python-triggered renders re-raise render
     exceptions instead of only surfacing them in widget state.
+    `transport_mode="comm"` streams frames through marimo's existing widget
+    channel and works through ordinary SSH port forwarding. Use
+    `transport_mode="websocket"` for the older direct local websocket stream.
 
     The returned widget exposes:
 
@@ -2233,9 +2256,14 @@ def marimo_viewer(
             raise_on_error=(
                 raise_on_error if raise_on_error is not None else True
             ),
+            transport_mode=(
+                transport_mode if transport_mode is not None else "comm"
+            ),
         )
     elif initial_view is not None:
         state.set_camera(initial_view)
+    if transport_mode is not None:
+        state.transport_mode = transport_mode
 
     existing_viewer = (
         None
@@ -2270,6 +2298,7 @@ def marimo_viewer(
         stream_port=stream_server.port,
         stream_path=f"/streams/{stream_id}",
         stream_token=stream_token,
+        transport_mode=state.transport_mode,
     )
     if state.last_click is not None:
         anywidget_instance.last_click_json = state.last_click.to_json()

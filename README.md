@@ -1,13 +1,13 @@
-# marimo-viser
+# marimo-3dv
 
-`marimo-viser` embeds a live [`viser`](https://github.com/nerfstudio-project/viser)
-viewer inside a [`marimo`](https://marimo.io) notebook.
+`marimo-3dv` provides 3D viewer widgets and Gaussian splat utilities for
+[`marimo`](https://marimo.io) notebooks.
 
 It gives you:
 
 - a marimo-reactive widget by default
-- optional `nerfview` render-loop integration
 - a native image-based viewer for custom renderers
+- Gaussian splat loading and viewer pipeline helpers
 - explicit save/restore camera state controls
 - safer `render_fn` error handling in notebooks
 
@@ -16,63 +16,16 @@ It gives you:
 Targets Python 3.11+.
 
 ```bash
-uv pip install -e .
+uv pip install marimo-3dv
+```
+
+Desktop Qt controls are optional:
+
+```bash
+uv pip install "marimo-3dv[desktop]"
 ```
 
 ## Usage
-
-Viser-only mode:
-
-```python
-from marimo_viser import viser_marimo
-
-server, widget = viser_marimo()
-widget
-```
-
-Nerfview mode:
-
-```python
-import nerfview
-import numpy as np
-from jaxtyping import UInt8
-
-from marimo_viser import viser_marimo
-
-
-def render_fn(
-    camera_state: nerfview.CameraState,
-    render_tab_state: nerfview.RenderTabState,
-) -> UInt8[np.ndarray, "height width 3"]:
-    width = render_tab_state.viewer_width
-    height = render_tab_state.viewer_height
-    c2w = camera_state.c2w
-    K = camera_state.get_K([width, height])
-
-    camera_dirs = np.einsum(
-        "ij,hwj->hwi",
-        np.linalg.inv(K),
-        np.pad(
-            np.stack(
-                np.meshgrid(np.arange(width), np.arange(height), indexing="xy"),
-                -1,
-            )
-            + 0.5,
-            ((0, 0), (0, 0), (0, 1)),
-            constant_values=1.0,
-        ),
-    )
-    dirs = np.einsum("ij,hwj->hwi", c2w[:3, :3], camera_dirs)
-    dirs /= np.linalg.norm(dirs, axis=-1, keepdims=True)
-    return ((dirs + 1.0) / 2.0 * 255.0).astype(np.uint8)
-
-
-server, viewer, widget = viser_marimo(render_fn=render_fn)
-widget
-```
-
-The returned `widget` is already reactive in marimo, so downstream cells can
-depend on `widget.value`.
 
 Native viewer mode:
 
@@ -80,7 +33,7 @@ Native viewer mode:
 import torch
 from typing import Literal
 
-from marimo_viser import CameraState, NativeViewerState, native_viewer
+from marimo_3dv import CameraState, ViewerState, marimo_viewer
 
 
 def render_fn(
@@ -159,11 +112,9 @@ def render_fn(
     return ((base_image + directional_noise * noise).clip(0, 1) * 255.0).to(torch.uint8)
 
 
-viewer_state = NativeViewerState()
-viewer = native_viewer(
+viewer_state = ViewerState()
+viewer = marimo_viewer(
     render_fn,
-    aspect_ratio=16.3 / 9,
-    interactive_scale=0.5,
     state=viewer_state,
 )
 viewer
@@ -178,15 +129,10 @@ The native viewer callback receives a typed `CameraState` with:
 - `camera_convention`, currently `Literal["opencv", "opengl", "blender", "colmap"]`
 
 `width` and `height` are measured from the rendered marimo widget size, so you
-do not pass them into `native_viewer()`. Use `aspect_ratio=` to control the
-initial layout, which defaults to `16.3 / 9`.
+do not pass them into `marimo_viewer()`.
 
 If you want the view to survive reruns while `render_fn` changes, reuse the
-same `NativeViewerState` object and pass it with `state=...`.
-
-`interactive_scale=` can be used to downscale motion renders while keeping the
-settled frame at full resolution. `None` and `1.0` both disable the
-downscaling path.
+same `ViewerState` object and pass it with `state=...`.
 
 The native viewer currently defaults to OpenCV convention, exposed as
 `camera_convention="opencv"`. The widget converts between `opencv`, `opengl`,
@@ -259,13 +205,13 @@ state = widget.get_camera_state()
 widget.set_camera_state(state)
 ```
 
-The typed representation is `ViserCameraState` with:
+The typed representation is `CameraState` with:
 
-- `position`
-- `wxyz`
-- `look_at`
-- `up_direction`
-- `fov`
+- `fov_degrees`
+- `width`
+- `height`
+- `cam_to_world`
+- `camera_convention`
 
 ## Render Errors
 
@@ -273,7 +219,6 @@ If `render_fn` raises, the kernel stays alive.
 
 - the traceback is printed server-side
 - the viewer shows an error image
-- the `viser` GUI shows a copyable traceback panel
+- the browser-side viewer shows a copyable traceback panel
 
-See [example.py](/home/schlack/Repositories/marimo-viser/notebooks/example.py)
-for a notebook example.
+See the notebooks in this repository for examples.

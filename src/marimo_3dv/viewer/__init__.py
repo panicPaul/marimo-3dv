@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import marimo as mo
 
-from marimo_3dv.viewer.controls import DesktopPydanticControls
 from marimo_3dv.viewer.defaults import (
     CombinedViewerPipelineControlsHandle,
     ViewerCameraConfig,
@@ -28,7 +27,6 @@ from marimo_3dv.viewer.defaults import (
     viewer_pipeline_controls_gui,
     viewer_pipeline_controls_handle,
 )
-from marimo_3dv.viewer.desktop import DesktopViewer, desktop_viewer
 from marimo_3dv.viewer.link import ViewerStateLink, link_viewer_states
 from marimo_3dv.viewer.widget import (
     CameraState,
@@ -38,6 +36,17 @@ from marimo_3dv.viewer.widget import (
     ViewerState,
     marimo_viewer,
 )
+
+if TYPE_CHECKING:
+    from marimo_3dv.viewer.controls import DesktopPydanticControls
+    from marimo_3dv.viewer.desktop import DesktopViewer
+
+
+def desktop_viewer(*args: Any, **kwargs: Any) -> DesktopViewer:
+    """Create a desktop viewer, importing PySide only when needed."""
+    from marimo_3dv.viewer.desktop import desktop_viewer as _desktop_viewer
+
+    return _desktop_viewer(*args, **kwargs)
 
 
 def Viewer(

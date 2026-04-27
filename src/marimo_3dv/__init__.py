@@ -1,4 +1,10 @@
 """Public package exports for marimo-3dv."""
+
+try:
+    from marimo_3dv._version import __version__
+except Exception:
+    __version__ = "0.0.0+unknown"
+
 from marimo_3dv.ops.gs import (
     CompiledGsRenderView,
     FilterOpacityConfig,
@@ -122,6 +128,7 @@ __all__ = [
     "ViewerState",
     "ViewerStateLink",
     "ViewerTransformConfig",
+    "__version__",
     "apply_rotation_to_quaternions",
     "apply_rotation_to_sh_coefficients",
     "apply_scale_to_log_scales",

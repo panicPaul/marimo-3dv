@@ -9,11 +9,11 @@ import marimo as mo
 from pydantic import BaseModel, Field, create_model
 
 from marimo_config_gui import form_gui
-from marimo_3dv.viewer.controls import DesktopPydanticControls
 from marimo_3dv.viewer.widget import ViewerState
 
 if TYPE_CHECKING:
     from marimo_3dv.pipeline.gui import ViewerPipelineResult
+    from marimo_3dv.viewer.controls import DesktopPydanticControls
 
 PipelineConfigT = TypeVar("PipelineConfigT", bound=BaseModel)
 
@@ -236,20 +236,21 @@ def viewer_controls_handle(
     resolved_default_config = default_config or viewer_controls_config(
         viewer_state
     )
-    gui = (
-        form_gui(
+    if mo.running_in_notebook():
+        gui = form_gui(
             ViewerControlsConfig,
             value=resolved_default_config,
             label=label,
             live_update=True,
         )
-        if mo.running_in_notebook()
-        else DesktopPydanticControls(
+    else:
+        from marimo_3dv.viewer.controls import DesktopPydanticControls
+
+        gui = DesktopPydanticControls(
             ViewerControlsConfig,
             value=resolved_default_config,
             label=label,
         )
-    )
     return ViewerControlsHandle(
         config_model=ViewerControlsConfig,
         default_config=resolved_default_config,
@@ -302,20 +303,21 @@ def viewer_pipeline_controls_handle(
         viewer=resolved_viewer_default,
         pipeline=pipeline_result.default_config,
     )
-    gui = (
-        form_gui(
+    if mo.running_in_notebook():
+        gui = form_gui(
             combined_model,
             value=default_config,
             label=label,
             live_update=True,
         )
-        if mo.running_in_notebook()
-        else DesktopPydanticControls(
+    else:
+        from marimo_3dv.viewer.controls import DesktopPydanticControls
+
+        gui = DesktopPydanticControls(
             combined_model,
             value=default_config,
             label=label,
         )
-    )
     return CombinedViewerPipelineControlsHandle(
         config_model=combined_model,
         default_config=default_config,

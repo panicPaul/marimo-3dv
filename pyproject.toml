@@ -79,7 +79,6 @@ conflicts = [
 ]
 
 [tool.uv.sources]
-marimo-config-gui = { path = "../../packages/marimo-config-gui", editable = true }
 torch = [
     { index = "pytorch-cu128", extra = "cu128" },
     { index = "pytorch-cu130", extra = "cu130" },
